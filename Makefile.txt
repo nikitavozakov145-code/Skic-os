@@ -1,0 +1,46 @@
+# Skic OS Build System
+CC = x86_64-elf-gcc
+AS = nasm
+LD = x86_64-elf-ld
+GRUB = grub-mkrescue
+
+CFLAGS = -ffreestanding -O2 -Wall -Wextra -mno-red-zone
+LDFLAGS = -nostdlib -lgcc
+
+TARGET = skic-os.iso
+KERNEL = kernel/skic.bin
+BOOT = boot/boot.o
+
+# Components
+KERNEL_OBJS = kernel/main.o kernel/memory.o kernel/task.o \
+              kernel/ipc.o kernel/syscall.o kernel/interrupt.o
+
+all: $(TARGET)
+
+$(TARGET): $(KERNEL)
+	mkdir -p isodir/boot/grub
+	cp $(KERNEL) isodir/boot/
+	cp grub.cfg isodir/boot/grub/
+	$(GRUB) -o $@ isodir
+
+$(KERNEL): $(BOOT) $(KERNEL_OBJS)
+	$(LD) -T linker.ld -o $@ $^ $(LDFLAGS)
+
+# Явное правило для загрузочного ассемблерного файла
+$(BOOT): boot/boot.asm
+	$(AS) -f elf64 -o $@ $<
+
+# Общее правило для других ассемблерных файлов (если появятся)
+%.o: %.asm
+	$(AS) -f elf64 -o $@ $<
+
+# Правило для компиляции C-файлов
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+clean:
+	rm -f $(BOOT) $(KERNEL_OBJS) $(KERNEL) $(TARGET)
+	rm -rf isodir
+
+run: $(TARGET)
+	qemu-system-x86_64 -cdrom $(TARGET) -m 2G -smp 4

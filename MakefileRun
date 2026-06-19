@@ -1,0 +1,56 @@
+# Skic OS Build System
+CC = x86_64-elf-gcc
+AS = nasm
+LD = x86_64-elf-ld
+GRUB = grub-mkrescue
+
+CFLAGS = -ffreestanding -O2 -Wall -Wextra -mno-red-zone
+LDFLAGS = -nostdlib -lgcc
+
+TARGET = skic-os.iso
+KERNEL_BIN = boot/skic.bin          # относительный путь внутри образа
+KERNEL_ELF = build/skic.elf          # временный файл (можно иначе)
+
+# Объектные файлы (из src)
+BOOT_OBJ = build/boot.o
+KERNEL_OBJS = build/main.o build/memory.o build/task.o \
+              build/ipc.o build/syscall.o build/interrupt.o
+
+ALL_OBJS = $(BOOT_OBJ) $(KERNEL_OBJS)
+
+# Флаги для поиска исходников
+VPATH = src/boot:src/kernel
+
+all: $(TARGET)
+
+# Сборка ISO
+$(TARGET): $(KERNEL_ELF) grub.cfg
+	mkdir -p isodir/boot/grub isodir/etc isodir/home isodir/lib isodir/run \
+	         isodir/sbin isodir/sys isodir/usr isodir/var
+	cp $(KERNEL_ELF) isodir/$(KERNEL_BIN)
+	cp grub.cfg isodir/boot/grub/
+	# Копируем остальные каталоги (пока пустые, но структура сохраняется)
+	# Можно добавить копирование реальных файлов позже
+	$(GRUB) -o $@ isodir
+
+# Линковка ядра
+$(KERNEL_ELF): $(ALL_OBJS) linker.ld
+	$(LD) -T linker.ld -o $@ $(ALL_OBJS) $(LDFLAGS)
+
+# Сборка boot.o
+$(BOOT_OBJ): boot.asm
+	mkdir -p build
+	$(AS) -f elf64 -o $@ $<
+
+# Сборка объектных файлов ядра
+build/%.o: %.c
+	mkdir -p build
+	$(CC) $(CFLAGS) -c $< -o $@
+
+# Очистка
+clean:
+	rm -rf build isodir $(TARGET)
+
+# Запуск в QEMU
+run: $(TARGET)
+	qemu-system-x86_64 -cdrom $(TARGET) -m 2G -smp 4

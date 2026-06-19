@@ -1,0 +1,353 @@
+#!/usr/bin/env bash
+# Fetch binary file from github repository
+# See help:
+#   $ curl -Ls https://raw.github.com/rikby/bin-downloader/master/download | bash -s -- --help
+# Short link:
+#   https://goo.gl/ve2Xvw
+
+set -o errexit
+set -o pipefail
+set -o nounset
+#set -o xtrace
+
+show_help () {
+  cat <<-EOF
+GitHub binary scripts downloader
+Version: 0.2.0 (2017-04-19)
+
+USING EXAMPLES
+  Download binary file
+    $ curl -Ls https://raw.github.com/rikby/bin-downloader/master/download | bash -s -- \\
+          your-vendor/some-name \\
+          dir/some-file.sh -- \\
+          --filename|-f some-file \\
+          --version|-v v0.2.1
+
+    $ curl URL | bash -s -- REPO FILE \\
+      [--end-message "message"|--app-name "my name"] -- \\
+      [--file FILE|-f FILE|--filename NAME|-n NAME|--versions|--version 0.1.2]
+
+    $ curl URL | bash -s -- REPO FILE [SCRIPT OPTIONS] -- [USER OPTIONS]
+
+SCRIPT SPECIFIC OPTIONS
+  REPO          Repository full name "vendor/name" in github.com.
+  FILE          Requested file in the passed repository.
+  --end-message This will be showed in the end of downloading.
+                %s will be replaced with full path to downloaded file.
+                Default: "Binary file: %s\n"
+  --app-name    Use passed name in 3rd party downloader help.
+                Use "_" instead spaces in the name. "_" will be replaced with spaces.
+  --downloader  Custom 3rd party downloader path in repository.
+                Uses in 3rd party downloader help.
+                Example: my-branch/my/path/downloader
+                Default: master/downloader
+                Where "master" is a branch name.
+  --help        Show this help.
+
+END USER OPTIONS
+  --versions    Show created tags.
+  --version|-v  Created tag name or branch name.
+                Default: last tag or master if there is no tags.
+  --file|-f     Path to save downloaded file.
+  --filename|-n Name to downloaded file by default path.
+                (/usr/local/bin or /usr/bin)
+  --help        Show help for 3rd party downloader.
+
+YOUR DOWNLOAD SCRIPT
+
+  Create your "download" script in your master branch in the repository root.
+  Please replace "your-vendor/some-name" string with your path.
+
+  #!/usr/bin/env bash
+  # Fetch binary file
+  #   $ curl -Ls https://raw.github.com/your-vendor/some-name/master/download | bash
+  # See help:
+  #   $ curl -Ls https://raw.github.com/your-vendor/some-name/master/download | bash -s -- --help
+
+  set -o errexit
+  set -o pipefail
+  set -o nounset
+  #set -o xtrace
+
+  # Download
+  curl -Ls https://raw.github.com/rikby/bin-downloader/master/download | bash -s -- \\
+      your-vendor/some-name \\
+      dir/some-file.sh --app-name "My_Name" -- --filename some-file \$@
+EOF
+}
+
+show_app_help () {
+  local app_name
+  app_name=${1:-GitHub binary scripts downloader https://raw.github.com/rikby/bin-downloader}
+  cat <<-EOF
+${app_name}
+
+USING
+  Download your binary file
+    $ curl -Ls https://raw.github.com/${repo_name}/${downloader:-master/download} | bash
+
+  Or use some options
+    $ curl -Ls https://raw.github.com/${repo_name}/${downloader:-master/download} | bash -s -- \\
+          --filename|-f some-file \\
+          --version|-v v0.2.1
+
+OPTIONS
+  --versions    Show created tags.
+  --version|-v  Created tag name or branch name.
+                Default: last tag or master if there is no tags.
+  --file|-f     Path to save downloaded file.
+  --filename|-n Name of downloaded file by default path.
+                (/usr/local/bin or /usr/bin)
+  --help        Show this help.
+EOF
+}
+
+parse_options () {
+  [ -z "${1:-}" ] && return
+
+  # Define repository name
+  if [ '-' != "${1::1}" ]; then
+    repo_name="$1";
+    shift
+  fi
+
+  [ -z "${1:-}" ] && return
+
+  # Define path to a file in repository
+  if [ '-' != "${1::1}" ]; then
+    repo_file="$1";
+    shift
+  fi
+
+  [ -z "${1:-}" ] && return
+
+  # validate and redefine options
+  OPTS=$(getopt \
+    -o hlv:f:r:p:n: \
+    -l help,versions,version:,file:,repo-file:,repo:,filename:,app-name:,downloader: \
+    -- "$@")
+  eval set -- "${OPTS}"
+
+  while true; do
+    [ -z "${1:-}" ] && break
+    case "${1}" in
+      # Message in the end. %s will be replaced with a created file.
+      --end-message|-m)
+        end_message="$2";
+        shift 2;
+        ;;
+      --app-name)
+        app_name=$(echo $2 | tr '_' ' ');
+        shift 2;
+        ;;
+      --downloader)
+        downloader="$2"
+        shift 2;
+        ;;
+      # Show help
+      --help|-h)
+        show_help;
+        exit 0
+        shift;
+        ;;
+      --)
+        shift
+        break
+        ;;
+      *)
+        echo "${0}: unparseable option ${1}." > /dev/stderr
+        exit 3
+        ;;
+    esac
+  done
+
+  while true; do
+    [ -z "${1:-}" ] && break
+    case "${1}" in
+      # Pass a target version. Default: master
+      --version|-v)
+        version="$2";
+        shift 2;
+        ;;
+      # Show versions
+      --versions|-l)
+        action='versions';
+        shift;
+        ;;
+      # Use param to set full path to created binary file
+      --file|-f)
+        output_file="$2";
+        shift 2;
+        ;;
+      # Use param to set filename in default path
+      --filename|-n)
+        output_filename="$2";
+        shift 2;
+        ;;
+      # Show application help
+      --help|-h)
+        action='application_help'
+        shift
+        ;;
+      --)
+      echo ${1}
+        shift
+        break
+        ;;
+      *)
+        echo "${0}: unparseable option ${1}."
+        #exit 3
+        break
+        ;;
+    esac
+  done
+}
+
+process_repo_params() {
+  if [ -z "${repo_name:-}" ]; then
+    echo 'error: Repo name cannot be empty.'
+    echo 'Please define: vendor/name'
+    echo 'Use --help to get more info.'
+    exit 3
+  fi
+  if [ -z "${repo_file:-}" ]; then
+    echo 'error: Requested repository file cannot be empty.' > /dev/stderr
+    echo 'Please define: dir/file' > /dev/stderr
+    echo 'Use --help to get more info.' > /dev/stderr
+    exit 3
+  fi
+  base_url='https://raw.github.com/'${repo_name}
+  base_api_url='https://api.github.com/repos/'${repo_name}
+}
+
+init_user_home_bin() {
+  if [ ! -d "$(cd; pwd)/bin" ]; then
+    mkdir -p "$(cd; pwd)/bin"
+  fi
+}
+
+writable_bin_path() {
+  local path_delimiter IFS paths
+  init_user_home_bin
+  path_delimiter=$(echo ${PATH} | grep -oE '[;:]' | head -1)
+  while IFS="${path_delimiter}" read -ra paths; do
+    for i in "${paths[@]}"; do
+      if echo "${i}" | grep -E '^(/usr/|'$(cd; pwd)')' | grep -vE '(composer|vendor)' > /dev/null && [[ "${i}" =~ \/bin$ ]]; then
+        if touch ${i}/test_touch 2> /dev/null; then
+          rm -rf ${i}/test_touch
+          echo ${i}
+          break
+        fi
+      fi
+    done
+  done <<< "$PATH"
+}
+
+process_params () {
+  local bin_dir
+  if [ -z "${output_file:-}" ] && [ -z "${output_filename:-}" ] ; then
+    output_filename=$(basename ${repo_file})
+  elif [ -n "${output_file:-}" ] && [ '/' != ${output_file::1} ]; then
+    echo 'error: Path to output file must absolute. Please define: -f|--file file_name' > /dev/stderr
+    exit 2
+  fi
+
+  # Use filename instead empty absolute file
+  if [ -z "${output_file:-}" ]; then
+    bin_dir=$(writable_bin_path)
+    if [ -z "${bin_dir}" ]; then
+      echo 'error: There is no writable binary directory. Please check ${PATH} environment variable or define custom path: -f|--file file_name' > /dev/stderr
+      exit 2
+    fi
+    output_file=${bin_dir}/${output_filename}
+  fi
+
+  if [ ! -d $(dirname ${output_file}) ]; then
+    echo 'error: Directory "'$(dirname ${output_file})'" for output file does not exist.' > /dev/stderr
+    exit 2
+  fi
+}
+
+fetch_tags () {
+  curl -Ls ${base_api_url}/tags | grep '"name"' | cut -d '"' -f 4 || true
+}
+
+touch_file () {
+  if [ -d "${output_file}" ]; then
+    echo "error: There is a directory '${output_file}' by target file path." > /dev/stderr
+    exit 2
+  fi
+  if [ ! -f "${output_file}" ]; then
+    if [ -z "$(touch ${output_file} && echo 1 || true)" ]; then
+      echo "error: Cannot create file '${output_file}'. Please check permissions." > /dev/stderr
+      exit 2
+    fi
+    echo 1
+  else
+    echo 0
+  fi
+}
+
+fetch_file () {
+  curl -Ls ${base_url}/${version}/${repo_file} \
+    --fail -w '%{http_code}' --output ${output_file}
+}
+
+process_response () {
+  local http_code=$1
+  if [ '200' != "${http_code}" ]; then
+    echo "error: [${http_code}] No such version or bad connection." > /dev/stderr
+    if [ ${had_file} == 0 ]; then
+      rm -rf ${output_file}
+    fi
+    exit 8
+  fi
+}
+set_exec_permissions () {
+  if [[ ! "$(uname -a)" =~ 'Msys' ]]; then
+    chmod +x ${output_file}
+  fi
+}
+
+show_end_message () {
+  printf "${end_message}" "${output_file}"
+}
+
+download_script () {
+  local version end_message action \
+    version output_file output_filename \
+    repo_name repo_file app_name downloader
+
+  end_message='Binary file: %s'"\n"
+  action='download'
+
+  parse_options $@
+
+  process_repo_params
+
+  if [ 'application_help' == "${action}" ]; then
+    show_app_help "${app_name:-}"
+    exit 0
+  fi
+
+  process_params
+
+  if [ 'versions' == "${action}" ]; then
+    fetch_tags
+    exit 0
+  fi
+
+  # fetch last tag or use master
+  if [ -z "${version:-}" ]; then
+    version=$(fetch_tags | head -1)
+    version=${version:-master}
+  fi
+
+  echo "Fetching ${base_url}/${version}/${repo_file}..."
+  had_file=$(touch_file)
+  process_response $(fetch_file)
+  set_exec_permissions
+  show_end_message
+}
+
+download_script $@
