@@ -1,0 +1,34 @@
+site_name: Skic OS Documentation
+site_description: Документация операционной системы Skic OS
+theme:
+  name: material
+  palette:
+    scheme: slate
+    primary: indigo
+    accent: purple
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - toc.integrate
+
+nav:
+  - Главная: index.md
+  - Установка: installation.md
+  - Сборка: build.md
+  - Архитектура: architecture.md
+  - API:
+      - Системные вызовы: syscalls.md
+      - Драйверы: drivers.md
+      - GUI: gui.md
+  - Разработка:
+      - Стиль кода: coding-style.md
+      - Добавление драйвера: new-driver.md
+      - Тестирование: testing.md
+
+plugins:
+  - search
+  - mermaid2
+
+markdown_extensions:
+  - pymdownx.highlight
+  - pymdownx.superfences
