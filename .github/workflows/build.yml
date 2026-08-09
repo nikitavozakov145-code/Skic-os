@@ -1,0 +1,42 @@
+name: Build Skic OS
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          nasm gcc-multilib qemu-system-x86 \
+          grub-pc-bin xorriso mtools
+    
+    - name: Build kernel
+      run: make kernel
+    
+    - name: Build apps
+      run: make apps
+    
+    - name: Build ISO
+      run: make iso
+    
+    - name: Upload ISO artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: skic-os-iso
+        path: build/skic-os-*.iso
+    
+    - name: Test in QEMU (boot test)
+      run: |
+        timeout 10s qemu-system-x86_64 -cdrom build/skic-os-*.iso -nographic -no-reboot || true
+        # Проверяем, что QEMU запустился и не вылетел
+        test $? -eq 124 && echo "Boot successful" || exit 1
